@@ -49,7 +49,9 @@ PubSubClient mqtt(wifiClient);
 enum menuState {
   menu,
   objective,
-  subjective
+  subjective,
+  trackCaffeine,
+  trackMelatonin
 };
 
 menuState currentState = menu;
@@ -67,6 +69,7 @@ int logIndex = 0;
 // State Variables
 int menuSelection = 0;
 int subMenuSelection = 0;
+int caffeineValue = 0;
 volatile int encoderCounter = 0;
 volatile int lastCounter;
 volatile int lastEncoded = 0;
@@ -146,7 +149,7 @@ void manageMQTT() {
   }
 }
 
-void saveData() {
+void saveData(int counter) {
   if (logIndex >= MAX_RECORDS) {
     Serial.println("Memory Full!");
     return;
@@ -154,7 +157,7 @@ void saveData() {
 
   // 1. Save to Memory
   dataLog[logIndex].timestamp = millis();
-  dataLog[logIndex].value = encoderCounter;
+  dataLog[logIndex].value = counter;
 
   // 2. Visual Feedback (Flash Screen)
   display.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
@@ -195,16 +198,22 @@ void handleInput() {
       case objective:
         if (subMenuSelection == 0) {
           // Enter Caffeine Tracking Mode (You need to build this state!)
-          // currentState = trackCaffeine;
+          caffeineValue = 0;
+          currentState = trackCaffeine;
         }
         else if (subMenuSelection == 1) {
           // Enter Melatonin Tracking Mode
-          // currentState = trackMelatonin;
+          currentState = trackMelatonin;
         }
         else if (subMenuSelection == 2) {
           // BACK BUTTON CLICKED -> Go Home
           currentState = menu;
         }
+        break;
+
+      case trackCaffeine:
+        saveData(caffeineValue);
+        currentState = menu;
         break;
       }
       lastButtonPress = millis();
@@ -236,6 +245,13 @@ void handleEncoder() {
       // Clamp to 0-2 (Caffeine, Melatonin, Back)
       if (subMenuSelection > 2) subMenuSelection = 2;
       if (subMenuSelection < 0) subMenuSelection = 0;
+      break;
+
+    case trackCaffeine:
+      if (delta > 0) caffeineValue += 10;
+      else if (delta < 0) caffeineValue -= 10;
+      if (caffeineValue < 0) caffeineValue = 0;
+      if (caffeineValue > 300) caffeineValue = 300;
       break;
     }
     lastCounter = currentCounter;
@@ -319,6 +335,43 @@ void drawObjective() {
   display.println("< BACK");
 }
 
+void drawCaffeineTracker() {
+  // --- 1. Header ---
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(30, 0);
+  display.println("LOG CAFFEINE");
+  display.drawLine(0, 10, 128, 10, WHITE); // Divider line
+
+  // --- 2. The Big Number ---
+  // Center the number based on how many digits it has
+  int numX = 40;
+  if (caffeineValue < 10) numX = 55;
+  else if (caffeineValue < 100) numX = 48;
+  else numX = 40;
+
+  display.setTextSize(3);
+  display.setCursor(numX, 20);
+  display.print(caffeineValue);
+
+  // --- 3. The Unit Label ---
+  display.setTextSize(1);
+  display.setCursor(numX + 55, 34); // Position "mg" next to the number
+  display.print("mg");
+
+  // --- 4. The Progress Bar (Visual Flair) ---
+  // Draws a box at the bottom that fills up to 400mg
+  display.drawRect(10, 50, 108, 8, WHITE); // Empty frame
+
+  // Calculate fill width (Map 0-400mg to 0-104 pixels)
+  int barWidth = map(caffeineValue, 0, 300, 0, 104);
+
+  // Safety clamp so it doesn't draw outside the box
+  if (barWidth > 104) barWidth = 104;
+
+  display.fillRect(12, 52, barWidth, 4, WHITE); // Filled bar
+}
+
 void updateDisplay() {
 
   display.clearDisplay();
@@ -338,6 +391,9 @@ void updateDisplay() {
     break;
   case subjective:
     // drawSubjective();
+    break;
+  case trackCaffeine:
+    drawCaffeineTracker();
     break;
   }
 
