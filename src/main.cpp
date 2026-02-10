@@ -5,17 +5,13 @@
 #include <Adafruit_SH1106.h>
 #include <WiFi.h>
 #include "PubSubClient.h"
+#include "secrets.h"
 
 // ==========================================
 //               CONFIGURATION
 // ==========================================
 
-const char* SSID          = "yardnet";
-const char* PASS          = "YogiYogi835";
-const char* MQTT_HOST     = "10.0.0.21";
-const uint16_t MQTT_PORT  = 1883;
-const char* DEVICE_ID     = "esp32-01";
-const char* TOPIC_EVENTS  = "tracker/esp32-01/events";
+
 
 #define PIN_ENC_A    32
 #define PIN_ENC_B    33
@@ -140,10 +136,17 @@ void saveData(int value, String type) {
   Serial.println("SAVING " + type + ": " + String(value));
 
   if (mqtt.connected()) {
-    char payload[100];
-    // FIXED BUG: Now sends 'value' (clean number) instead of 'encoderCounter' (raw clicks)
-    // Also added "type" to JSON so you know if it's caffeine or melatonin
-    snprintf(payload, sizeof(payload), "{\"type\":\"%s\", \"val\":%d, \"ts\":%lu}", type.c_str(), value, millis());
+    char payload[200];
+
+    // Create a unique Event ID (device + time + random/sequence)
+    unsigned long now = millis();
+
+    // Schema: { schema, event_id, device_id, event_type, value, unit }
+    // Note: We are omitting 'ts_device' for now. The backend will just use the server's time (ts_server).
+    snprintf(payload, sizeof(payload),
+      "{\"schema\":1, \"event_id\":\"%s-%lu\", \"device_id\":\"%s\", \"event_type\":\"%s\", \"value\":%d, \"unit\":\"mg\"}",
+      DEVICE_ID, now, DEVICE_ID, type.c_str(), value
+    );
     mqtt.publish(TOPIC_EVENTS, payload);
   }
 
@@ -162,7 +165,8 @@ void handleInput() {
             currentState = objective;
             subMenuSelection = 0;
           } else {
-            currentState = subjective;
+            // #todo: add in functionality and menuing for subjective state
+            // currentState = subjective;
           }
           break;
 
