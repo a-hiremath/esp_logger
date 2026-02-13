@@ -6,6 +6,8 @@
 #include <WiFi.h>
 #include "PubSubClient.h"
 #include "secrets.h"
+#include <ThreeWire.h>
+#include <RtcDS1302.h>
 
 // ==========================================
 //               CONFIGURATION
@@ -23,6 +25,11 @@
 #define PIN_OLED_CS   5
 #define PIN_OLED_RST  4
 
+#define PIN_RTC_CLK 13
+#define PIN_RTC_DAT 14
+#define PIN_RTC_RST 27
+
+
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define DISPLAY_FPS 30
@@ -35,6 +42,9 @@
 Adafruit_SH1106 display(PIN_OLED_MOSI, PIN_OLED_CLK, PIN_OLED_DC, PIN_OLED_RST, PIN_OLED_CS);
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
+
+ThreeWire myWire(PIN_RTC_DAT, PIN_RTC_CLK, PIN_RTC_RST);
+RtcDS1302<ThreeWire> rtc(myWire);
 
 enum menuState {
   menu,
@@ -49,6 +59,7 @@ menuState currentState = menu;
 struct DataPoint {
   uint32_t timestamp;
   int16_t value;
+  char type[12];
 };
 
 const int MAX_RECORDS = 50;
@@ -121,12 +132,17 @@ void manageMQTT() {
 }
 
 // Generalized Save Function
-// Added 'type' parameter so you know what you are saving in the logs
 void saveData(int value, String type) {
   if (logIndex >= MAX_RECORDS) return;
 
-  dataLog[logIndex].timestamp = millis();
+  // 1. Get the time from the RTC
+  RtcDateTime now = rtc.GetDateTime();
+
+  // 2. Save raw seconds to local memory (efficient)
+  dataLog[logIndex].timestamp = now.TotalSeconds();
   dataLog[logIndex].value = value;
+  strncpy(dataLog[logIndex].type, type.c_str(), 11);
+  dataLog[logIndex].type[11] = '\0';
 
   // Flash Screen Feedback
   display.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
@@ -136,22 +152,33 @@ void saveData(int value, String type) {
   Serial.println("SAVING " + type + ": " + String(value));
 
   if (mqtt.connected()) {
-    char payload[200];
+    char payload[256]; // Increased size for the new string
+    char timeStr[25];  // Buffer to hold "2026-02-12T14:45:00"
 
-    // Create a unique Event ID (device + time + random/sequence)
-    unsigned long now = millis();
+    // 3. Create the Human-Readable String
+    // %04u means "unsigned integer, at least 4 digits, pad with 0"
+    snprintf(timeStr, sizeof(timeStr), "%04u-%02u-%02uT%02u:%02u:%02u",
+             now.Year(), now.Month(), now.Day(),
+             now.Hour(), now.Minute(), now.Second());
 
-    // Schema: { schema, event_id, device_id, event_type, value, unit }
-    // Note: We are omitting 'ts_device' for now. The backend will just use the server's time (ts_server).
+    // 4. Add "timestamp": "..." to the JSON
     snprintf(payload, sizeof(payload),
-      "{\"schema\":1, \"event_id\":\"%s-%lu\", \"device_id\":\"%s\", \"event_type\":\"%s\", \"value\":%d, \"unit\":\"mg\"}",
-      DEVICE_ID, now, DEVICE_ID, type.c_str(), value
+      "{\"schema\":1, \"event_id\":\"%s-%u\", \"timestamp\":\"%s\", \"device_id\":\"%s\", \"event_type\":\"%s\", \"value\":%d, \"unit\":\"mg\"}",
+      DEVICE_ID,
+      now.TotalSeconds(),
+      timeStr,
+      DEVICE_ID,
+      type.c_str(),
+      value
     );
+
+    Serial.println(payload);
     mqtt.publish(TOPIC_EVENTS, payload);
   }
 
   logIndex++;
 }
+
 
 void handleInput() {
   if (digitalRead(PIN_ENC_SW) == LOW) {
@@ -378,8 +405,32 @@ void updateDisplay() {
 //               MAIN SETUP
 // ==========================================
 
+void rtcSetup()
+{
+  if (rtc.GetIsWriteProtected())
+  {
+    rtc.SetIsWriteProtected(false);
+  }
+
+  if (!rtc.GetIsRunning())
+  {
+    rtc.SetIsRunning(true);
+  }
+
+  RtcDateTime now = rtc.GetDateTime();
+  RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
+
+  if (now < compiled) {
+    rtc.SetDateTime(compiled);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
+
+  rtc.Begin();
+  rtcSetup();
+
 
   pinMode(PIN_ENC_A, INPUT_PULLUP);
   pinMode(PIN_ENC_B, INPUT_PULLUP);
